@@ -19,7 +19,7 @@ import {
   DEMO_PROJECTS,
 } from "@/lib/gnss-data";
 
-export const Route = createFileRoute("/dashboard")({
+export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
     meta: [
       { title: "Workspace — GNSS · IGS Research Platform" },
