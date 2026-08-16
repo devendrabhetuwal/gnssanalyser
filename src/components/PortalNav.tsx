@@ -39,6 +39,9 @@ export function PortalNav() {
           <Link to="/" className={linkClass} activeProps={activeProps} activeOptions={{ exact: true }}>
             Overview
           </Link>
+          <Link to="/tech-lab" className={linkClass} activeProps={activeProps}>
+            Tech Lab
+          </Link>
           {session && (
             <Link to="/dashboard" className={linkClass} activeProps={activeProps}>
               Workspace
