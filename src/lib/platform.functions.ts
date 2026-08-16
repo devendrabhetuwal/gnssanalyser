@@ -6,24 +6,19 @@ export const getWorkspaceSummary = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { supabase, userId } = context;
-
     const [projects, files, metrics] = await Promise.all([
       supabase.from("projects").select("id, name, status, storage_bytes, updated_at").order("updated_at", { ascending: false }),
       supabase.from("project_files").select("id, filename, format, size_bytes, transfer_status, created_at").order("created_at", { ascending: false }).limit(10),
       supabase.from("render_metrics").select("id, kind, label, duration_ms, point_count, created_at").order("created_at", { ascending: false }).limit(20),
     ]);
-
     const projectRows = projects.data ?? [];
     const metricRows = metrics.data ?? [];
-
     return {
       userId,
       projectCount: projectRows.length,
       storageBytes: projectRows.reduce((a, p) => a + Number(p.storage_bytes ?? 0), 0),
       activeTransfers: (files.data ?? []).filter((f) => f.transfer_status !== "complete").length,
-      avgRenderMs: metricRows.length
-        ? Math.round(metricRows.reduce((a, m) => a + m.duration_ms, 0) / metricRows.length)
-        : 0,
+      avgRenderMs: metricRows.length ? Math.round(metricRows.reduce((a, m) => a + m.duration_ms, 0) / metricRows.length) : 0,
       projects: projectRows,
       files: files.data ?? [],
       metrics: metricRows,
@@ -55,15 +50,17 @@ export const getAdminTelemetry = createServerFn({ method: "GET" })
     if (!isAdmin) throw new Error("Forbidden: administrator role required");
 
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    const [profiles, roles, projects, files, metrics] = await Promise.all([
+    const [profiles, roles, projects, files, metrics, callerProfile] = await Promise.all([
       supabase.from("profiles").select("id, email, display_name, auth_provider, created_at").order("created_at", { ascending: false }),
       supabase.from("user_roles").select("user_id, role"),
       supabase.from("projects").select("id, name, owner_id, status, storage_bytes, updated_at").order("updated_at", { ascending: false }),
       supabase.from("project_files").select("id, filename, format, size_bytes, transfer_status, owner_id, created_at").order("created_at", { ascending: false }).limit(50),
       supabase.from("render_metrics").select("id, kind, label, duration_ms, point_count, succeeded, created_at").gte("created_at", since).order("created_at", { ascending: false }),
+      supabase.from("profiles").select("email").eq("id", userId).maybeSingle(),
     ]);
 
+    const mainAdminEmail = process.env.MAIN_ADMIN_EMAIL?.trim().toLowerCase();
+    const canManageRoles = !!mainAdminEmail && callerProfile.data?.email?.trim().toLowerCase() === mainAdminEmail;
     const profileRows = profiles.data ?? [];
     const roleRows = roles.data ?? [];
     const projectRows = projects.data ?? [];
@@ -72,11 +69,8 @@ export const getAdminTelemetry = createServerFn({ method: "GET" })
 
     const projectsByOwner = new Map<string, number>();
     for (const p of projectRows) projectsByOwner.set(p.owner_id, (projectsByOwner.get(p.owner_id) ?? 0) + 1);
-
     const storageByOwner = new Map<string, number>();
-    for (const p of projectRows) {
-      storageByOwner.set(p.owner_id, (storageByOwner.get(p.owner_id) ?? 0) + Number(p.storage_bytes ?? 0));
-    }
+    for (const p of projectRows) storageByOwner.set(p.owner_id, (storageByOwner.get(p.owner_id) ?? 0) + Number(p.storage_bytes ?? 0));
 
     const users = profileRows.map((p) => ({
       id: p.id,
@@ -88,11 +82,9 @@ export const getAdminTelemetry = createServerFn({ method: "GET" })
       storageBytes: storageByOwner.get(p.id) ?? 0,
     }));
 
-    const totalStorage =
-      projectRows.reduce((a, p) => a + Number(p.storage_bytes ?? 0), 0) +
-      fileRows.reduce((a, f) => a + Number(f.size_bytes ?? 0), 0);
-
+    const totalStorage = projectRows.reduce((a, p) => a + Number(p.storage_bytes ?? 0), 0) + fileRows.reduce((a, f) => a + Number(f.size_bytes ?? 0), 0);
     return {
+      canManageRoles,
       users,
       projects: projectRows,
       files: fileRows,
@@ -105,12 +97,8 @@ export const getAdminTelemetry = createServerFn({ method: "GET" })
         activeTransfers: fileRows.filter((f) => f.transfer_status !== "complete").length,
         rendersLast24h: metricRows.length,
         pointsLast24h: metricRows.reduce((a, m) => a + m.point_count, 0),
-        avgRenderMs: metricRows.length
-          ? Math.round(metricRows.reduce((a, m) => a + m.duration_ms, 0) / metricRows.length)
-          : 0,
-        failureRate: metricRows.length
-          ? Math.round((metricRows.filter((m) => !m.succeeded).length / metricRows.length) * 100)
-          : 0,
+        avgRenderMs: metricRows.length ? Math.round(metricRows.reduce((a, m) => a + m.duration_ms, 0) / metricRows.length) : 0,
+        failureRate: metricRows.length ? Math.round((metricRows.filter((m) => !m.succeeded).length / metricRows.length) * 100) : 0,
       },
       recentMetrics: metricRows.slice(0, 25),
     };
@@ -125,15 +113,8 @@ export const setUserRole = createServerFn({ method: "POST" })
     const { data: isAdmin } = await supabase.rpc("has_role", { _user_id: userId, _role: "admin" });
     if (!isAdmin) throw new Error("Forbidden: administrator role required");
 
-    const { data: callerProfile, error: callerError } = await supabase
-      .from("profiles")
-      .select("email")
-      .eq("id", userId)
-      .maybeSingle();
+    const { data: callerProfile, error: callerError } = await supabase.from("profiles").select("email").eq("id", userId).maybeSingle();
     if (callerError) throw new Error(callerError.message);
-
-    // Admin 1 and all other admins are deliberately prevented from changing roles.
-    // The main administrator is identified by the dedicated MAIN_ADMIN_EMAIL value.
     const mainAdminEmail = process.env.MAIN_ADMIN_EMAIL?.trim().toLowerCase();
     if (!mainAdminEmail || callerProfile?.email?.trim().toLowerCase() !== mainAdminEmail) {
       throw new Error("Forbidden: only the Main Administrator can change admin access");
@@ -141,19 +122,11 @@ export const setUserRole = createServerFn({ method: "POST" })
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     if (data.makeAdmin) {
-      const { error } = await supabaseAdmin
-        .from("user_roles")
-        .upsert({ user_id: data.targetUserId, role: "admin" }, { onConflict: "user_id,role" });
+      const { error } = await supabaseAdmin.from("user_roles").upsert({ user_id: data.targetUserId, role: "admin" }, { onConflict: "user_id,role" });
       if (error) throw new Error(error.message);
     } else {
-      if (data.targetUserId === userId) {
-        throw new Error("The Main Administrator cannot remove their own admin access");
-      }
-      const { error } = await supabaseAdmin
-        .from("user_roles")
-        .delete()
-        .eq("user_id", data.targetUserId)
-        .eq("role", "admin");
+      if (data.targetUserId === userId) throw new Error("The Main Administrator cannot remove their own admin access");
+      const { error } = await supabaseAdmin.from("user_roles").delete().eq("user_id", data.targetUserId).eq("role", "admin");
       if (error) throw new Error(error.message);
     }
     return { ok: true };
