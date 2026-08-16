@@ -116,7 +116,7 @@ export const getAdminTelemetry = createServerFn({ method: "GET" })
     };
   });
 
-/** Promote/demote a user. Admin only. */
+/** Promote/demote a user. Only the MAIN_ADMIN account may change admin roles. */
 export const setUserRole = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: { targetUserId: string; makeAdmin: boolean }) => input)
@@ -125,6 +125,20 @@ export const setUserRole = createServerFn({ method: "POST" })
     const { data: isAdmin } = await supabase.rpc("has_role", { _user_id: userId, _role: "admin" });
     if (!isAdmin) throw new Error("Forbidden: administrator role required");
 
+    const { data: callerProfile, error: callerError } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("id", userId)
+      .maybeSingle();
+    if (callerError) throw new Error(callerError.message);
+
+    // Admin 1 and all other admins are deliberately prevented from changing roles.
+    // The main administrator is identified by the dedicated MAIN_ADMIN_EMAIL value.
+    const mainAdminEmail = process.env.MAIN_ADMIN_EMAIL?.trim().toLowerCase();
+    if (!mainAdminEmail || callerProfile?.email?.trim().toLowerCase() !== mainAdminEmail) {
+      throw new Error("Forbidden: only the Main Administrator can change admin access");
+    }
+
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     if (data.makeAdmin) {
       const { error } = await supabaseAdmin
@@ -132,6 +146,9 @@ export const setUserRole = createServerFn({ method: "POST" })
         .upsert({ user_id: data.targetUserId, role: "admin" }, { onConflict: "user_id,role" });
       if (error) throw new Error(error.message);
     } else {
+      if (data.targetUserId === userId) {
+        throw new Error("The Main Administrator cannot remove their own admin access");
+      }
       const { error } = await supabaseAdmin
         .from("user_roles")
         .delete()
