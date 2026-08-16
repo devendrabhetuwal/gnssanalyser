@@ -12,7 +12,7 @@ type Props = {
 function cssVar(el: HTMLElement, value: string) {
   const match = value.match(/var\((--[\w-]+)\)/);
   if (!match) return value;
-  return getComputedStyle(el).getPropertyValue(match[1]).trim() || "#2EE6C5";
+  return getComputedStyle(el).getPropertyValue(match[1] as string).trim() || "#2EE6C5";
 }
 
 /**
