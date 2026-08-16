@@ -1,14 +1,25 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { Satellite } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-const links = [
-  { to: "/", label: "Overview" },
-  { to: "/dashboard", label: "Workspace" },
-  { to: "/admin", label: "Admin" },
-] as const;
+import { useAuth } from "@/hooks/useAuth";
 
 export function PortalNav() {
+  const { session, isAdmin, signOut } = useAuth();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const handleSignOut = async () => {
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    await signOut();
+    navigate({ to: "/auth", replace: true });
+  };
+
+  const linkClass =
+    "rounded-full border border-transparent px-3.5 py-1.5 font-mono text-xs uppercase tracking-widest text-muted-foreground transition-colors hover:border-border hover:text-foreground";
+  const activeProps = { className: "border-primary/40 bg-primary/10 text-primary" };
+
   return (
     <header className="sticky top-0 z-30 border-b border-border/60 bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-5 py-3">
@@ -25,20 +36,28 @@ export function PortalNav() {
         </Link>
 
         <nav className="ml-auto flex items-center gap-1">
-          {links.map((l) => (
-            <Link
-              key={l.to}
-              to={l.to}
-              className="rounded-full border border-transparent px-3.5 py-1.5 font-mono text-xs uppercase tracking-widest text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-              activeProps={{ className: "border-primary/40 bg-primary/10 text-primary" }}
-              activeOptions={{ exact: l.to === "/" }}
-            >
-              {l.label}
+          <Link to="/" className={linkClass} activeProps={activeProps} activeOptions={{ exact: true }}>
+            Overview
+          </Link>
+          {session && (
+            <Link to="/dashboard" className={linkClass} activeProps={activeProps}>
+              Workspace
             </Link>
-          ))}
-          <Button size="sm" variant="outline" className="ml-2 font-mono text-xs">
-            Sign in
-          </Button>
+          )}
+          {session && isAdmin && (
+            <Link to="/admin" className={linkClass} activeProps={activeProps}>
+              Admin
+            </Link>
+          )}
+          {session ? (
+            <Button size="sm" variant="outline" className="ml-2 font-mono text-xs" onClick={handleSignOut}>
+              Sign out
+            </Button>
+          ) : (
+            <Button asChild size="sm" variant="outline" className="ml-2 font-mono text-xs">
+              <Link to="/auth">Sign in</Link>
+            </Button>
+          )}
         </nav>
       </div>
     </header>
